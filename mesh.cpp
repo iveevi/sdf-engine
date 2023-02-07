@@ -1,14 +1,21 @@
 // Standard headers
+#include <algorithm>
 #include <filesystem>
 #include <unordered_map>
+
+// STB headers
+#define STB_IMAGE_IMPLEMENTATION
+
+#include <stb/stb_image.h>
+
+// TinyObjLoader headers
+#define TINYOBJLOADER_IMPLEMENTATION
+
+#include <tinyobjloader/tiny_obj_loader.h>
 
 // Engine headers
 #include "gl.hpp"
 #include "mesh.hpp"
-
-#define TINYOBJLOADER_IMPLEMENTATION
-
-#include <tinyobjloader/tiny_obj_loader.h>
 
 namespace tinyobj {
 
@@ -228,15 +235,25 @@ Model load_model(const std::string &path)
 					// mat.roughness = glm::clamp(1.0f - mat.shininess/1000.0f, 1e-3f, 0.999f);
 					// mat.refraction = m.ior;
 
-					/* Albedo texture
+					// Albedo texture
 					if (!m.diffuse_texname.empty()) {
-						mat.albedo_texture = m.diffuse_texname;
-						mat.albedo_texture = common::resolve_path(
-							m.diffuse_texname, {reader_config.mtl_search_path}
-						);
+						std::replace(m.diffuse_texname.begin(), m.diffuse_texname.end(), '\\', '/');
+						printf("Diffuse texture: %s\n", m.diffuse_texname.c_str());
+
+						// Search for file in the search path
+						std::filesystem::path p(reader_config.mtl_search_path);
+						p /= m.diffuse_texname;
+
+						printf("Resolved path: %s\n", p.c_str());
+
+						// If the file exists, use it
+						if (std::filesystem::exists(p)) {
+							printf("File exists\n");
+							material.diffuse_texture = allocate_gl_texture(p.c_str());
+						}
 					}
 
-					// Normal texture
+					/* Normal texture
 					if (!m.normal_texname.empty()) {
 						mat.normal_texture = m.normal_texname;
 						mat.normal_texture = common::resolve_path(
@@ -320,4 +337,45 @@ GLBuffers allocate_gl_buffers(const Mesh *mesh)
 	buffers.source = mesh;
 
 	return buffers;
+}
+
+GLTexture allocate_gl_texture(const std::string &path)
+{
+	GLTexture texture;
+
+	// Load with stb_image
+	int width, height, channels;
+	unsigned char *data = stbi_load(path.c_str(), &width, &height, &channels, 0);
+	if (!data) {
+		fprintf(stderr, "Failed to load texture: %s\n", path.c_str());
+		texture.id = 0;
+		return texture;
+	}
+
+	// Create texture
+	glGenTextures(1, &texture.id);
+	glBindTexture(GL_TEXTURE_2D, texture.id);
+
+	// Set texture parameters
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	// Set texture data
+	if (channels == 3)
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+	else if (channels == 4)
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+	else
+		fprintf(stderr, "Unsupported number of channels: %d\n", channels);
+
+	// Generate mipmaps
+	glGenerateMipmap(GL_TEXTURE_2D);
+
+	// Free image data
+	stbi_image_free(data);
+
+	texture.path = path;
+	return texture;
 }

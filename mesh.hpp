@@ -3,6 +3,7 @@
 // Standard headers
 #include <string>
 #include <vector>
+#include <optional>
 
 // GLM headers
 #include <glm/glm.hpp>
@@ -16,10 +17,17 @@ struct Vertex {
 	// glm::vec3 bitangent;
 };
 
+struct GLTexture {
+	std::string path;
+	unsigned int id;
+};
+
 struct Material {
 	glm::vec3 diffuse;
 	glm::vec3 specular;
 	float roughness;
+
+	std::optional <GLTexture> diffuse_texture = {};
 };
 
 struct Mesh {
@@ -43,3 +51,4 @@ struct GLBuffers {
 
 Model load_model(const std::string &);
 GLBuffers allocate_gl_buffers(const Mesh *);
+GLTexture allocate_gl_texture(const std::string &);
