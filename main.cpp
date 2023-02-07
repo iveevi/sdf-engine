@@ -16,6 +16,11 @@ static struct {
 
 int main()
 {
+	// TODO: materials in storage buffers for easy access in path tracer
+
+	// TODO: for path tracing: G-buffer using position, normal, and material
+	// index outputs
+
 	// Initialize GLFW
 	GLFWwindow *window = glfw_init();
 	if (!window)
@@ -23,7 +28,7 @@ int main()
 
 	// Load shaders
 	unsigned int vertex_shader = compile_shader("../shaders/basic.vert", GL_VERTEX_SHADER);
-	unsigned int fragment_shader = compile_shader("../shaders/basic.frag", GL_FRAGMENT_SHADER);
+	unsigned int fragment_shader = compile_shader("../shaders/albedo.frag", GL_FRAGMENT_SHADER);
 
 	// Create shader program
 	unsigned int shader_program = glCreateProgram();
@@ -37,11 +42,10 @@ int main()
 
 	std::vector <GLBuffers> buffers;
 	for (const Mesh &mesh : model.meshes)
-		buffers.push_back(allocate_gl_buffers(mesh));
+		buffers.push_back(allocate_gl_buffers(&mesh));
 
 	// Enable depth testing
 	glEnable(GL_DEPTH_TEST);
-	// glDepthFunc(GL_ALWAYS);
 
 	// Main loop
 	while (!glfwWindowShouldClose(window)) {
@@ -84,6 +88,8 @@ int main()
 		// TODO: use common VAO...
 		glBindVertexArray(buffers[0].vao);
 		for (const GLBuffers &buffer : buffers) {
+			set_vec3(shader_program, "diffuse", buffer.source->material.diffuse);
+
 			glBindVertexArray(buffer.vao);
 			glDrawElements(GL_TRIANGLES, buffer.count, GL_UNSIGNED_INT, 0);
 		}
@@ -99,6 +105,76 @@ int main()
 	return 0;
 }
 
+static bool dragging = false;
+
+static void mouse_callback(GLFWwindow *window, double xpos, double ypos)
+{
+	static double last_x = WIDTH/2.0;
+	static double last_y = HEIGHT/2.0;
+
+	static float sensitivity = 0.1f;
+
+	static bool first_mouse = true;
+
+	static float yaw = 0.0f;
+	static float pitch = 0.0f;
+
+	if (first_mouse) {
+		last_x = xpos;
+		last_y = ypos;
+		first_mouse = false;
+	}
+
+	double xoffset = last_x - xpos;
+	double yoffset = last_y - ypos;
+
+	last_x = xpos;
+	last_y = ypos;
+
+	xoffset *= sensitivity;
+	yoffset *= sensitivity;
+
+	// Only drag when left mouse button is pressed
+	if (dragging) {
+		yaw += xoffset;
+		pitch += yoffset;
+
+		// Clamp pitch
+		if (pitch > 89.0f)
+			pitch = 89.0f;
+		if (pitch < -89.0f)
+			pitch = -89.0f;
+
+		// Set camera transform yaw and pitch
+		glm::mat4 &transform = camera.transform;
+
+		// First decompose the transform matrix
+		glm::vec3 translation;
+		glm::vec3 scale;
+		glm::quat rotation;
+		glm::vec3 skew;
+		glm::vec4 perspective;
+
+		glm::decompose(transform, scale, rotation, translation, skew, perspective);
+
+		// Then set the rotation
+		rotation = glm::quat(glm::vec3(glm::radians(pitch), glm::radians(yaw), 0.0f));
+
+		// Finally recompose the transform matrix
+		transform = glm::translate(glm::mat4 {1.0f}, translation);
+		transform = transform * glm::mat4_cast(rotation);
+		transform = glm::scale(transform, scale);
+	}
+}
+
+void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
+{
+	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
+		dragging = true;
+	else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE)
+		dragging = false;
+}
+
 GLFWwindow *glfw_init()
 {
 	// Basic window
@@ -106,7 +182,7 @@ GLFWwindow *glfw_init()
 	if (!glfwInit())
 		return nullptr;
 
-	window = glfwCreateWindow(WIDTH, HEIGHT, "Tranquil", NULL, NULL);
+	window = glfwCreateWindow(WIDTH, HEIGHT, "SDF Engine", NULL, NULL);
 
 	// Check if window was created
 	if (!window) {
@@ -123,10 +199,10 @@ GLFWwindow *glfw_init()
 		return nullptr;
 	}
 
-	/* Set up callbacks
+	// Set up callbacks
 	glfwSetCursorPosCallback(window, mouse_callback);
 	glfwSetMouseButtonCallback(window, mouse_button_callback);
-	glfwSetKeyCallback(window, keyboard_callback); */
+	// glfwSetKeyCallback(window, keyboard_callback);
 
 	const GLubyte* renderer = glGetString(GL_RENDERER);
 	printf("Renderer: %s\n", renderer);

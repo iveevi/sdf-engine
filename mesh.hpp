@@ -17,10 +17,9 @@ struct Vertex {
 };
 
 struct Material {
-	glm::vec3 ambient;
 	glm::vec3 diffuse;
 	glm::vec3 specular;
-	float shininess;
+	float roughness;
 };
 
 struct Mesh {
@@ -38,7 +37,9 @@ struct GLBuffers {
 	uint32_t vbo;
 	uint32_t ebo;
 	uint32_t count;
+
+	const Mesh *source = nullptr;
 };
 
 Model load_model(const std::string &);
-GLBuffers allocate_gl_buffers(const Mesh &);
+GLBuffers allocate_gl_buffers(const Mesh *);

@@ -212,40 +212,23 @@ Model load_model(const std::string &path)
 			if (f == mesh.num_face_vertices.size() - 1 ||
 					mesh.material_ids[f] != mesh.material_ids[f + 1]) {
 				Material material;
-				/* Material
 
 				// TODO: method
 				if (mesh.material_ids[f] < materials.size()) {
 					tinyobj::material_t m = materials[mesh.material_ids[f]];
-					mat.diffuse = {m.diffuse[0], m.diffuse[1], m.diffuse[2]};
-					mat.specular = {m.specular[0], m.specular[1], m.specular[2]};
-					mat.ambient = {m.ambient[0], m.ambient[1], m.ambient[2]};
-					mat.emission = {m.emission[0], m.emission[1], m.emission[2]};
+					material.diffuse = {m.diffuse[0], m.diffuse[1], m.diffuse[2]};
+					material.specular = {m.specular[0], m.specular[1], m.specular[2]};
+					// material.ambient = {m.ambient[0], m.ambient[1], m.ambient[2]};
 
-					// Check emission
-					if (length(mat.emission) > 0.0f) {
-						std::cout << "Emission: " << mat.emission.x << ", " << mat.emission.y << ", " << mat.emission.z << std::endl;
-						mat.type = eEmissive;
-					}
+					// material.emission = {m.emission[0], m.emission[1], m.emission[2]};
 
 					// Surface properties
-					mat.shininess = m.shininess;
-					// mat.roughness = sqrt(2.0f / (mat.shininess + 2.0f));
-					mat.roughness = glm::clamp(1.0f - mat.shininess/1000.0f, 1e-3f, 0.999f);
-					mat.refraction = m.ior;
+					// mat.shininess = m.shininess;
+					material.roughness = sqrt(2.0f / (m.shininess + 2.0f));
+					// mat.roughness = glm::clamp(1.0f - mat.shininess/1000.0f, 1e-3f, 0.999f);
+					// mat.refraction = m.ior;
 
-					// TODO: handle types of rays/materials
-					// in the shader
-					switch (m.illum) {
-					/* case 4:
-						mat.type = Shading::eTransmission;
-						break; *
-					case 7:
-						mat.type = eTransmission;
-						break;
-					}
-
-					// Albedo texture
+					/* Albedo texture
 					if (!m.diffuse_texname.empty()) {
 						mat.albedo_texture = m.diffuse_texname;
 						mat.albedo_texture = common::resolve_path(
@@ -277,8 +260,8 @@ Model load_model(const std::string &path)
 						);
 
 						mat.type = eEmissive;
-					}
-				} */
+					} */
+				}
 
 				// Add submesh
 				meshes.push_back(Mesh {vertices, indices, material});
@@ -295,7 +278,7 @@ Model load_model(const std::string &path)
 	return Model {meshes};
 }
 
-GLBuffers allocate_gl_buffers(const Mesh &mesh)
+GLBuffers allocate_gl_buffers(const Mesh *mesh)
 {
 	GLBuffers buffers;
 
@@ -310,16 +293,16 @@ GLBuffers allocate_gl_buffers(const Mesh &mesh)
 	// Bind VBO
 	glBindBuffer(GL_ARRAY_BUFFER, buffers.vbo);
 	glBufferData(GL_ARRAY_BUFFER,
-		mesh.vertices.size() * sizeof(Vertex),
-		mesh.vertices.data(),
+		mesh->vertices.size() * sizeof(Vertex),
+		mesh->vertices.data(),
 		GL_STATIC_DRAW
 	);
 
 	// Bind EBO
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffers.ebo);
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-		mesh.indices.size() * sizeof(unsigned int),
-		mesh.indices.data(),
+		mesh->indices.size() * sizeof(unsigned int),
+		mesh->indices.data(),
 		GL_STATIC_DRAW
 	);
 
@@ -333,6 +316,8 @@ GLBuffers allocate_gl_buffers(const Mesh &mesh)
 	glEnableVertexAttribArray(2);
 	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *) offsetof(Vertex, uv));
 
-	buffers.count = mesh.indices.size();
+	buffers.count = mesh->indices.size();
+	buffers.source = mesh;
+
 	return buffers;
 }
