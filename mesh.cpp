@@ -83,6 +83,12 @@ struct hash <Vertex> {
 
 }
 
+// All materials
+std::vector <Material> Material::all {
+	// Pad with a material to simplify things...
+	Material {}
+};
+
 // Load a model from a file
 Model load_model(const std::string &path)
 {
@@ -281,7 +287,10 @@ Model load_model(const std::string &path)
 				}
 
 				// Add submesh
-				meshes.push_back(Mesh {vertices, indices, material});
+				int material_index = Material::all.size();
+				Material::all.push_back(material);
+
+				meshes.push_back(Mesh {vertices, indices, material_index});
 
 				// Clear the vertices and indices
 				unique_vertices.clear();

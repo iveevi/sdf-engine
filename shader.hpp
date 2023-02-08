@@ -122,6 +122,13 @@ void set_int(unsigned int program, const char *name, int value)
 	glUniform1i(i, value);
 }
 
+void set_uint(unsigned int program, const char *name, unsigned int value)
+{
+	glUseProgram(program);
+	int i = glGetUniformLocation(program, name);
+	glUniform1ui(i, value);
+}
+
 void set_float(unsigned int program, const char *name, float value)
 {
 	glUseProgram(program);

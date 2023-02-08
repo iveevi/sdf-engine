@@ -8,12 +8,54 @@ constexpr int WIDTH = 1000;
 constexpr int HEIGHT = 1000;
 
 GLFWwindow *glfw_init();
-unsigned int allocate_gl_framebuffer();
 
 static struct {
 	glm::mat4 transform {1.0f};
 	Aperature aperature {};
 } camera;
+
+struct Framebuffer {
+	unsigned int framebuffer;
+
+	// G-buffers
+	unsigned int g_position;
+	unsigned int g_normal;
+	unsigned int g_material_index;
+};
+
+Framebuffer allocate_gl_framebuffer();
+
+// Quad rendering for the final image
+void render_final_image()
+{
+	static unsigned int vao = 0;
+	static unsigned int vbo;
+
+	if (vao == 0) {
+		constexpr float quad[] = {
+			-1.0f,  1.0f, 0.0f,	0.0f, 1.0f,
+			-1.0f, -1.0f, 0.0f,	0.0f, 0.0f,
+			 1.0f,  1.0f, 0.0f,	1.0f, 1.0f,
+			 1.0f, -1.0f, 0.0f,	1.0f, 0.0f,
+		};
+
+		// setup plane VAO
+		glGenVertexArrays(1, &vao);
+		glGenBuffers(1, &vbo);
+		glBindVertexArray(vao);
+		glBindBuffer(GL_ARRAY_BUFFER, vbo);
+		glBufferData(GL_ARRAY_BUFFER, sizeof(quad), &quad, GL_STATIC_DRAW);
+
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+	}
+
+	glBindVertexArray(vao);
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+	glBindVertexArray(0);
+}
 
 int main()
 {
@@ -30,15 +72,31 @@ int main()
 		return -1;
 
 	// Load shaders
-	unsigned int vertex_shader = compile_shader("../shaders/basic.vert", GL_VERTEX_SHADER);
-	unsigned int fragment_shader = compile_shader("../shaders/albedo.frag", GL_FRAGMENT_SHADER);
+	// unsigned int vertex_shader = compile_shader("../shaders/basic.vert", GL_VERTEX_SHADER);
+	// unsigned int fragment_shader = compile_shader("../shaders/albedo.frag", GL_FRAGMENT_SHADER);
 
-	// Create shader program
+	unsigned int vertex_shader = compile_shader("../shaders/gbuffer.vert", GL_VERTEX_SHADER);
+	unsigned int fragment_shader = compile_shader("../shaders/gbuffer.frag", GL_FRAGMENT_SHADER);
+
+	unsigned int quad_vertex_shader = compile_shader("../shaders/quad.vert", GL_VERTEX_SHADER);
+	unsigned int quad_fragment_shader = compile_shader("../shaders/quad.frag", GL_FRAGMENT_SHADER);
+
+	unsigned int path_tracer_shader = compile_shader("../shaders/render.glsl", GL_COMPUTE_SHADER);
+
+	// Create shader programs
 	unsigned int shader_program = glCreateProgram();
 	glAttachShader(shader_program, vertex_shader);
 	glAttachShader(shader_program, fragment_shader);
-
 	link_program(shader_program);
+
+	unsigned int quad_shader_program = glCreateProgram();
+	glAttachShader(quad_shader_program, quad_vertex_shader);
+	glAttachShader(quad_shader_program, quad_fragment_shader);
+	link_program(quad_shader_program);
+
+	unsigned int path_tracer_program = glCreateProgram();
+	glAttachShader(path_tracer_program, path_tracer_shader);
+	link_program(path_tracer_program);
 
 	// Load model and all its buffers
 	Model model = load_model("../../models/salle_de_bain/salle_de_bain.obj");
@@ -49,6 +107,20 @@ int main()
 
 	// Enable depth testing
 	glEnable(GL_DEPTH_TEST);
+
+	// Create the framebuffer
+	Framebuffer fb = allocate_gl_framebuffer();
+
+	// Allocate a destination texture for the compute shader
+	unsigned int render_target;
+	glGenTextures(1, &render_target);
+	glBindTexture(GL_TEXTURE_2D, render_target);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, WIDTH, HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+	// Unbind framebuffer
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
 	// Main loop
 	while (!glfwWindowShouldClose(window)) {
@@ -72,8 +144,11 @@ int main()
 
 		camera.transform = glm::translate(camera.transform, diff);
 
+		// Bind framebuffer
+		glBindFramebuffer(GL_FRAMEBUFFER, fb.framebuffer);
+
 		// Clear
-		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		// Load shader and set uniforms
@@ -91,13 +166,10 @@ int main()
 		// TODO: use common VAO...
 		glBindVertexArray(buffers[0].vao);
 		for (const GLBuffers &buffer : buffers) {
-			const Material &material = buffer.source->material;
+			unsigned int material_index = buffer.source->material_index;
+			const Material &material = Material::all[material_index];
 
-			std::cout << "Material: " << material.diffuse.x << ", " << material.diffuse.y << ", " << material.diffuse.z << std::endl;
-			std::cout << "\thas diffuse texture: " << material.diffuse_texture.has_value() << std::endl;
-			std::cout << "\tdiffuse texture id: " << material.diffuse_texture->id << std::endl;
-
-			bool has_diffuse_texture = material.diffuse_texture.has_value();
+			/* bool has_diffuse_texture = material.diffuse_texture.has_value();
 			set_vec3(shader_program, "diffuse", material.diffuse);
 			set_int(shader_program, "has_diffuse_texure", has_diffuse_texture);
 
@@ -105,11 +177,44 @@ int main()
 			if (has_diffuse_texture) {
 				glActiveTexture(GL_TEXTURE0);
 				glBindTexture(GL_TEXTURE_2D, material.diffuse_texture->id);
-			}
+			} */
+
+			set_uint(shader_program, "material_index", material_index);
 
 			glBindVertexArray(buffer.vao);
 			glDrawElements(GL_TRIANGLES, buffer.count, GL_UNSIGNED_INT, 0);
 		}
+
+		// Run the compute shader
+		glUseProgram(path_tracer_program);
+
+		// Run the shader
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, fb.g_position);
+
+		glActiveTexture(GL_TEXTURE2);
+		glBindTexture(GL_TEXTURE_2D, fb.g_normal);
+
+		// glActiveTexture(GL_TEXTURE3);
+		// glBindTexture(GL_TEXTURE_2D, fb.g_material_index);
+		
+		glBindImageTexture(0, render_target, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+		glBindImageTexture(3, fb.g_material_index, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32UI);
+
+		glDispatchCompute(WIDTH, HEIGHT, 1);
+
+		// Render the final image
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+		glUseProgram(quad_shader_program);
+
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, render_target);
+
+		render_final_image();
 
 		// Swap buffers
 		glfwSwapBuffers(window);
@@ -227,7 +332,7 @@ GLFWwindow *glfw_init()
 	return window;
 }
 
-unsigned int allocate_gl_framebuffer()
+Framebuffer allocate_gl_framebuffer()
 {
 	// Generate G-buffer for custom path tracer
 	unsigned int g_buffer;
@@ -251,7 +356,9 @@ unsigned int allocate_gl_framebuffer()
 	unsigned int g_material_index;
 	glGenTextures(1, &g_material_index);
 	glBindTexture(GL_TEXTURE_2D, g_material_index);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_R32I, WIDTH, HEIGHT, 0, GL_RED_INTEGER, GL_INT, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, WIDTH, HEIGHT, 0, GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
 	// Attach textures to G-buffer
 	glBindFramebuffer(GL_FRAMEBUFFER, g_buffer);
@@ -278,10 +385,15 @@ unsigned int allocate_gl_framebuffer()
 	// Check if framebuffer is complete
 	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
 		fprintf(stderr, "Framebuffer is not complete!\n");
-		return -1;
+		return {};
 	}
 
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-	return g_buffer;
+	return Framebuffer {
+		g_buffer,
+		g_position,
+		g_normal,
+		g_material_index,
+	};
 }

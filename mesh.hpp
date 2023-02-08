@@ -28,12 +28,15 @@ struct Material {
 	float roughness;
 
 	std::optional <GLTexture> diffuse_texture = {};
+
+	static std::vector <Material> all;
 };
 
 struct Mesh {
 	std::vector <Vertex> vertices;
 	std::vector <uint32_t> indices;
-	Material material;
+	int material_index;
+	// Material material;
 };
 
 struct Model {
