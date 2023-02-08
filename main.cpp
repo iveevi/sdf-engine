@@ -1,15 +1,25 @@
-#include <iostream>
 #include <future>
+#include <iostream>
+#include <vector>
 
 #include <tinyexr/tinyexr.h>
+
+#include <imgui/imgui.h>
+#include <imgui/backends/imgui_impl_opengl3.h>
+#include <imgui/backends/imgui_impl_glfw.h>
+
+#include <implot/implot.h>
 
 #include "aperature.hpp"
 #include "mesh.hpp"
 #include "shader.hpp"
 #include "logging.hpp"
 
-constexpr int WIDTH = 1000;
-constexpr int HEIGHT = 1000;
+constexpr int WINDOW_WIDTH = 1000;
+constexpr int WINDOW_HEIGHT = 1000;
+
+constexpr int RENDER_WIDTH = 1000;
+constexpr int RENDER_HEIGHT = 1000;
 
 GLFWwindow *glfw_init();
 
@@ -41,6 +51,12 @@ struct {
 	unsigned int materials_texture;
 	unsigned int environment_map;
 } pt;
+
+// Application state
+struct {
+	bool viewport_focused = false;
+	bool viewport_hovered = false;
+} app;
 
 // Allocate the materials
 struct CompressedMaterial {
@@ -142,6 +158,18 @@ int main()
 	if (!window)
 		return -1;
 
+	// Initialize ImGui
+	ImGui::CreateContext();
+	ImPlot::CreateContext();
+	ImGuiIO &io = ImGui::GetIO();
+	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+	io.ConfigWindowsMoveFromTitleBarOnly = true;
+
+	ImGui::StyleColorsDark();
+
+	ImGui_ImplGlfw_InitForOpenGL(window, true);
+	ImGui_ImplOpenGL3_Init("#version 450 core");
+
 	// Load shaders
 	unsigned int vertex_shader = compile_shader("../shaders/gbuffer.vert", GL_VERTEX_SHADER);
 	unsigned int fragment_shader = compile_shader("../shaders/gbuffer.frag", GL_FRAGMENT_SHADER);
@@ -176,7 +204,7 @@ int main()
 	unsigned int render_target;
 	glGenTextures(1, &render_target);
 	glBindTexture(GL_TEXTURE_2D, render_target);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, WIDTH, HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, RENDER_WIDTH, RENDER_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
@@ -207,28 +235,31 @@ int main()
 	};
 
 	auto future = std::async(std::launch::async, exr_loader);
+	auto start_time = std::chrono::high_resolution_clock::now();
 
 	// Main loop
 	while (!glfwWindowShouldClose(window)) {
 		constexpr float speed = 0.25f;
 
 		// Handle camera movement
-		glm::vec3 diff {0.0};
-		if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-			diff.z -= speed;
-		if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-			diff.x -= speed;
-		if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS)
-			diff.y += speed;
+		if (app.viewport_focused) {
+			glm::vec3 diff {0.0};
+			if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+				diff.z -= speed;
+			if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+				diff.x -= speed;
+			if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS)
+				diff.y += speed;
 
-		if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-			diff.x += speed;
-		if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-			diff.z += speed;
-		if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS)
-			diff.y -= speed;
+			if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+				diff.x += speed;
+			if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+				diff.z += speed;
+			if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS)
+				diff.y -= speed;
 
-		camera.transform = glm::translate(camera.transform, diff);
+			camera.transform = glm::translate(camera.transform, diff);
+		}
 
 		// Bind framebuffer
 		glBindFramebuffer(GL_FRAMEBUFFER, fb.framebuffer);
@@ -297,6 +328,8 @@ int main()
 				free(data);
 
 				glBindTexture(GL_TEXTURE_2D, 0);
+
+				// TODO: Trigger a popup (or go to the log...)
 			}
 
 			glActiveTexture(GL_TEXTURE5);
@@ -316,10 +349,93 @@ int main()
 		set_vec3(path_tracer_program, "camera.axis_w", std::get <2> (uvw));
 
 		// Run the shader
-		glDispatchCompute(WIDTH, HEIGHT, 1);
+		glDispatchCompute(RENDER_WIDTH, RENDER_HEIGHT, 1);
 
 		// Final composition
-		render_final_image(render_target);
+		// render_final_image(render_target);
+
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+		// Start the Dear ImGui frame
+		ImGui_ImplOpenGL3_NewFrame();
+		ImGui_ImplGlfw_NewFrame();
+
+		ImGui::NewFrame();
+
+		// Docking space
+		ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
+
+		// UI elements
+		ImGui::Begin("Performance");
+			ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+
+			// Plot the frame times over 5 seconds
+			using frame_time = std::pair <float, float>;
+			static std::vector <frame_time> frames;
+
+			float fps = ImGui::GetIO().Framerate;
+			float time = std::chrono::duration <float> (std::chrono::high_resolution_clock::now() - start_time).count();
+			frames.push_back({time, fps});
+
+			// Remove old frame times
+			while (frames.size() > 0 && frames.front().first < time - 5.0f)
+				frames.erase(frames.begin());
+
+			// Plot the frame times
+			ImPlot::SetNextAxesLimits(0, 5, 0, 165, ImGuiCond_Always);
+			if (ImPlot::BeginPlot("Frame times")) {
+				std::vector <float> times;
+				std::vector <float> fpses;
+
+				float min_time = frames.front().first;
+				for (auto &frame : frames) {
+					times.push_back(frame.first - min_time);
+					fpses.push_back(frame.second);
+				}
+
+				// Set limits
+				ImPlot::PlotLine("FPS", times.data(), fpses.data(), times.size());
+
+
+				ImPlot::EndPlot();
+			}
+		ImGui::End();
+
+		ImGui::Begin("Viewport");
+			constexpr float padding = 10;
+
+			// Get ImGui window size
+			ImVec2 window_size = ImGui::GetWindowSize();
+			window_size.x -= padding * 2;
+			window_size.y -= padding * 2;
+
+			// Set the camera aspect ratio for the next frame
+			camera.aperature.m_aspect = window_size.x / window_size.y;
+
+			// Render the framebuffer
+			// TODO: account for fov, etc.
+			ImGui::Image(
+				(void *)(intptr_t) render_target,
+				window_size,
+				ImVec2 {0, 1}, ImVec2 {1, 0}
+			);
+
+			// Check if the window has focus
+			app.viewport_hovered = ImGui::IsItemHovered();
+			app.viewport_focused = ImGui::IsWindowFocused();
+		ImGui::End();
+
+		ImGui::EndFrame();
+
+		// Update platform windows
+		ImGui::UpdatePlatformWindows();
+
+		// Render UI
+		ImGui::Render();
+		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
 		// Swap buffers
 		glfwSwapBuffers(window);
@@ -338,8 +454,8 @@ static bool dragging = false;
 
 static void mouse_callback(GLFWwindow *window, double xpos, double ypos)
 {
-	static double last_x = WIDTH/2.0;
-	static double last_y = HEIGHT/2.0;
+	static double last_x = WINDOW_WIDTH/2.0;
+	static double last_y = WINDOW_HEIGHT/2.0;
 
 	static float sensitivity = 0.1f;
 
@@ -398,10 +514,16 @@ static void mouse_callback(GLFWwindow *window, double xpos, double ypos)
 
 void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
 {
-	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
+	if (button == GLFW_MOUSE_BUTTON_LEFT
+			&& action == GLFW_PRESS
+			&& app.viewport_hovered) {
+		glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 		dragging = true;
-	else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE)
+	} else if ((button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE)
+			|| !app.viewport_hovered) {
+		glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 		dragging = false;
+	}
 }
 
 GLFWwindow *glfw_init()
@@ -411,7 +533,7 @@ GLFWwindow *glfw_init()
 	if (!glfwInit())
 		return nullptr;
 
-	window = glfwCreateWindow(WIDTH, HEIGHT, "SDF Engine", NULL, NULL);
+	window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "SDF Engine", NULL, NULL);
 
 	// Check if window was created
 	if (!window) {
@@ -449,21 +571,21 @@ Framebuffer allocate_gl_framebuffer()
 	unsigned int g_position;
 	glGenTextures(1, &g_position);
 	glBindTexture(GL_TEXTURE_2D, g_position);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, WIDTH, HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, RENDER_WIDTH, RENDER_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
 	unsigned int g_normal;
 	glGenTextures(1, &g_normal);
 	glBindTexture(GL_TEXTURE_2D, g_normal);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, WIDTH, HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, RENDER_WIDTH, RENDER_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
 	unsigned int g_material_index;
 	glGenTextures(1, &g_material_index);
 	glBindTexture(GL_TEXTURE_2D, g_material_index);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, WIDTH, HEIGHT, 0, GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, RENDER_WIDTH, RENDER_HEIGHT, 0, GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
@@ -486,7 +608,7 @@ Framebuffer allocate_gl_framebuffer()
 	unsigned int g_depth;
 	glGenTextures(1, &g_depth);
 	glBindTexture(GL_TEXTURE_2D, g_depth);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, WIDTH, HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, RENDER_WIDTH, RENDER_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, g_depth, 0);
 
 	// Check if framebuffer is complete

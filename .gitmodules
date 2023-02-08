@@ -10,3 +10,10 @@
 [submodule "vendor/tinyexr"]
 	path = vendor/tinyexr
 	url = https://github.com/syoyo/tinyexr
+[submodule "vendor/imgui"]
+	path = vendor/imgui
+	url = https://github.com/ocornut/imgui.git
+	branch = docking
+[submodule "vendor/implot"]
+	path = vendor/implot
+	url = https://github.com/epezent/implot

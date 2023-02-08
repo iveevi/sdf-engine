@@ -83,6 +83,7 @@ void main()
 		// Convert direction to UV coordinates
 		vec2 uv = dir_to_uv(dir);
 		vec4 env_color = texture(environment, uv);
+		// TODO: use texel fetch to make this faster?
 		imageStore(image, img_idx, tonemap(env_color));
 		return;
 	}
@@ -92,7 +93,19 @@ void main()
 
 	Material material = material_at(int(material_index));
 
-	vec3 color = material.diffuse + material.emission;
-	vec4 color4 = vec4(color, 0.0);
+	normal = normalize(normal);
+	
+	vec3 V = normalize(position - camera.position);
+	vec3 R = reflect(V, normal);
+
+	vec2 env_uv = dir_to_uv(R);
+	vec4 env_color = texture(environment, env_uv);
+
+	vec3 color = material.diffuse
+		+ material.emission
+		+ env_color.xyz;
+
+	vec4 color4 = vec4(color, 1.0);
+
 	imageStore(image, img_idx, tonemap(color4));
 }
