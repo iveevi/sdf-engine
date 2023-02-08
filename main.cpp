@@ -50,6 +50,7 @@ enum {
 struct {
 	unsigned int materials_texture;
 	unsigned int environment_map;
+	unsigned int render_target;
 } pt;
 
 // Application state
@@ -66,87 +67,27 @@ struct CompressedMaterial {
 	glm::vec4 roughness;
 };
 
-void allocate_pt_materials()
+void allocate_pt_materials();
+void imgui_init(GLFWwindow *);
+void render_pt_pipeline(std::future <std::tuple <float *, int, int>> &, Framebuffer &, std::vector <GLBuffers> &, unsigned int, unsigned int);
+void render_ui_pipeline();
+
+void imgui_init(GLFWwindow *window)
 {
-	constexpr unsigned int stride = sizeof(CompressedMaterial)/sizeof(glm::vec4);
+	ImGui::CreateContext();
+	ImPlot::CreateContext();
+	ImGuiIO &io = ImGui::GetIO();
 
-	// TODO: Colored logging
-	printf("Allocating %lu materials for path tracer\n", Material::all.size());
-	std::vector <CompressedMaterial> materials;
-	for (const Material &material : Material::all) {
-		CompressedMaterial compressed_material;
+	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+	io.ConfigWindowsMoveFromTitleBarOnly = true;
 
-		compressed_material.diffuse = glm::vec4 {material.diffuse, 1.0f};
-		compressed_material.specular = glm::vec4 {material.specular, 1.0f};
-		compressed_material.emission = glm::vec4 {material.emission, 1.0f};
-		compressed_material.roughness = glm::vec4 {material.roughness};
+	// Fonts
+	io.Fonts->AddFontFromFileTTF("../assets/fonts/Montserrat/static/Montserrat-SemiBold.ttf", 14);
 
-		materials.push_back(compressed_material);
-	}
+	ImGui::StyleColorsDark();
 
-	glGenTextures(1, &pt.materials_texture);
-	glBindTexture(GL_TEXTURE_2D, pt.materials_texture);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, stride * materials.size(), 1, 0, GL_RGBA, GL_FLOAT, materials.data());
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-	glBindTexture(GL_TEXTURE_2D, 0);
-}
-
-// Quad rendering for the final image
-void render_final_image(unsigned int render_target)
-{
-	// TODO: pass bool for deallocation
-	static unsigned int vao = 0;
-	static unsigned int vbo;
-	static unsigned int shader = 0;
-
-	if (vao == 0) {
-		constexpr float quad[] = {
-			-1.0f,  1.0f, 0.0f,	0.0f, 1.0f,
-			-1.0f, -1.0f, 0.0f,	0.0f, 0.0f,
-			1.0f,  1.0f, 0.0f,	1.0f, 1.0f,
-			1.0f, -1.0f, 0.0f,	1.0f, 0.0f,
-		};
-
-		// Setup plane VAO and VBO
-		glGenVertexArrays(1, &vao);
-		glGenBuffers(1, &vbo);
-		glBindVertexArray(vao);
-		glBindBuffer(GL_ARRAY_BUFFER, vbo);
-		glBufferData(GL_ARRAY_BUFFER, sizeof(quad), &quad, GL_STATIC_DRAW);
-
-		glEnableVertexAttribArray(0);
-		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
-
-		glEnableVertexAttribArray(1);
-		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
-
-		// Load shaders
-		unsigned int vertex_shader = compile_shader("../shaders/quad.vert", GL_VERTEX_SHADER);
-		unsigned int fragment_shader = compile_shader("../shaders/quad.frag", GL_FRAGMENT_SHADER);
-
-		shader = glCreateProgram();
-		glAttachShader(shader, vertex_shader);
-		glAttachShader(shader, fragment_shader);
-		link_program(shader);
-	}
-
-	// Bind and clear the main framebuffer
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-	// Render the final image
-	glUseProgram(shader);
-
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, render_target);
-
-	glBindVertexArray(vao);
-	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-	glBindVertexArray(0);
+	ImGui_ImplGlfw_InitForOpenGL(window, true);
+	ImGui_ImplOpenGL3_Init("#version 450 core");
 }
 
 int main()
@@ -159,16 +100,7 @@ int main()
 		return -1;
 
 	// Initialize ImGui
-	ImGui::CreateContext();
-	ImPlot::CreateContext();
-	ImGuiIO &io = ImGui::GetIO();
-	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-	io.ConfigWindowsMoveFromTitleBarOnly = true;
-
-	ImGui::StyleColorsDark();
-
-	ImGui_ImplGlfw_InitForOpenGL(window, true);
-	ImGui_ImplOpenGL3_Init("#version 450 core");
+	imgui_init(window);
 
 	// Load shaders
 	unsigned int vertex_shader = compile_shader("../shaders/gbuffer.vert", GL_VERTEX_SHADER);
@@ -201,9 +133,8 @@ int main()
 	Framebuffer fb = allocate_gl_framebuffer();
 
 	// Allocate a destination texture for the compute shader
-	unsigned int render_target;
-	glGenTextures(1, &render_target);
-	glBindTexture(GL_TEXTURE_2D, render_target);
+	glGenTextures(1, &pt.render_target);
+	glBindTexture(GL_TEXTURE_2D, pt.render_target);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, RENDER_WIDTH, RENDER_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -235,7 +166,6 @@ int main()
 	};
 
 	auto future = std::async(std::launch::async, exr_loader);
-	auto start_time = std::chrono::high_resolution_clock::now();
 
 	// Main loop
 	while (!glfwWindowShouldClose(window)) {
@@ -261,181 +191,11 @@ int main()
 			camera.transform = glm::translate(camera.transform, diff);
 		}
 
-		// Bind framebuffer
-		glBindFramebuffer(GL_FRAMEBUFFER, fb.framebuffer);
+		// Render the scene
+		render_pt_pipeline(future, fb, buffers, shader_program, path_tracer_program);
 
-		// Clear
-		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-		// Load shader and set uniforms
-		glUseProgram(shader_program);
-
-		glm::mat4 view = camera.aperature.view_matrix(camera.transform);
-		// TODO: pass extent to this method
-		glm::mat4 projection = camera.aperature.perspective_matrix();
-
-		glm::mat4 model {1.0f};
-		glm::scale(model, glm::vec3 {1.0f});
-
-		set_mat4(shader_program, "model", model);
-		set_mat4(shader_program, "view", view);
-		set_mat4(shader_program, "projection", projection);
-
-		// Draw
-		// TODO: use common VAO...
-		glBindVertexArray(buffers[0].vao);
-		for (const GLBuffers &buffer : buffers) {
-			unsigned int material_index = buffer.source->material_index;
-			set_uint(shader_program, "material_index", material_index);
-
-			glBindVertexArray(buffer.vao);
-			glDrawElements(GL_TRIANGLES, buffer.count, GL_UNSIGNED_INT, 0);
-		}
-
-		// Run the compute shader
-		glUseProgram(path_tracer_program);
-
-		// Bind all the textures
-		glActiveTexture(GL_TEXTURE1);
-		glBindTexture(GL_TEXTURE_2D, fb.g_position);
-
-		glActiveTexture(GL_TEXTURE2);
-		glBindTexture(GL_TEXTURE_2D, fb.g_normal);
-
-		glActiveTexture(GL_TEXTURE4);
-		glBindTexture(GL_TEXTURE_2D, fb.g_material_index);
-
-		glActiveTexture(GL_TEXTURE3);
-		glBindTexture(GL_TEXTURE_2D, pt.materials_texture);
-
-		// Environment map loading
-		if (future.valid()) {
-			if (future.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-				std::tuple <float *, int, int> result = future.get();
-
-				float *data = std::get <0> (result);
-				int width = std::get <1> (result);
-				int height = std::get <2> (result);
-
-				// Create environment map texture
-				printf("Creating environment map texture\n");
-				glGenTextures(1, &pt.environment_map);
-				glBindTexture(GL_TEXTURE_2D, pt.environment_map);
-				glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_FLOAT, data);
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-				free(data);
-
-				glBindTexture(GL_TEXTURE_2D, 0);
-
-				// TODO: Trigger a popup (or go to the log...)
-			}
-
-			glActiveTexture(GL_TEXTURE5);
-			glBindTexture(GL_TEXTURE_2D, 0);
-		} else {
-			glActiveTexture(GL_TEXTURE5);
-			glBindTexture(GL_TEXTURE_2D, pt.environment_map);
-		}
-
-		glBindImageTexture(0, render_target, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
-
-		// Set the uniforms
-		auto uvw = uvw_frame(camera.aperature, camera.transform);
-		set_vec3(path_tracer_program, "camera.position", camera.transform[3]);
-		set_vec3(path_tracer_program, "camera.axis_u", std::get <0> (uvw));
-		set_vec3(path_tracer_program, "camera.axis_v", std::get <1> (uvw));
-		set_vec3(path_tracer_program, "camera.axis_w", std::get <2> (uvw));
-
-		// Run the shader
-		glDispatchCompute(RENDER_WIDTH, RENDER_HEIGHT, 1);
-
-		// Final composition
-		// render_final_image(render_target);
-
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-		// Start the Dear ImGui frame
-		ImGui_ImplOpenGL3_NewFrame();
-		ImGui_ImplGlfw_NewFrame();
-
-		ImGui::NewFrame();
-
-		// Docking space
-		ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
-
-		// UI elements
-		ImGui::Begin("Performance");
-			ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-
-			// Plot the frame times over 5 seconds
-			using frame_time = std::pair <float, float>;
-			static std::vector <frame_time> frames;
-
-			float fps = ImGui::GetIO().Framerate;
-			float time = std::chrono::duration <float> (std::chrono::high_resolution_clock::now() - start_time).count();
-			frames.push_back({time, fps});
-
-			// Remove old frame times
-			while (frames.size() > 0 && frames.front().first < time - 5.0f)
-				frames.erase(frames.begin());
-
-			// Plot the frame times
-			ImPlot::SetNextAxesLimits(0, 5, 0, 165, ImGuiCond_Always);
-			if (ImPlot::BeginPlot("Frame times")) {
-				std::vector <float> times;
-				std::vector <float> fpses;
-
-				float min_time = frames.front().first;
-				for (auto &frame : frames) {
-					times.push_back(frame.first - min_time);
-					fpses.push_back(frame.second);
-				}
-
-				// Set limits
-				ImPlot::PlotLine("FPS", times.data(), fpses.data(), times.size());
-
-
-				ImPlot::EndPlot();
-			}
-		ImGui::End();
-
-		ImGui::Begin("Viewport");
-			constexpr float padding = 10;
-
-			// Get ImGui window size
-			ImVec2 window_size = ImGui::GetWindowSize();
-			window_size.x -= padding * 2;
-			window_size.y -= padding * 2;
-
-			// Set the camera aspect ratio for the next frame
-			camera.aperature.m_aspect = window_size.x / window_size.y;
-
-			// Render the framebuffer
-			// TODO: account for fov, etc.
-			ImGui::Image(
-				(void *)(intptr_t) render_target,
-				window_size,
-				ImVec2 {0, 1}, ImVec2 {1, 0}
-			);
-
-			// Check if the window has focus
-			app.viewport_hovered = ImGui::IsItemHovered();
-			app.viewport_focused = ImGui::IsWindowFocused();
-		ImGui::End();
-
-		ImGui::EndFrame();
-
-		// Update platform windows
-		ImGui::UpdatePlatformWindows();
-
-		// Render UI
-		ImGui::Render();
-		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+		// Render the UI
+		render_ui_pipeline();
 
 		// Swap buffers
 		glfwSwapBuffers(window);
@@ -625,4 +385,210 @@ Framebuffer allocate_gl_framebuffer()
 		g_normal,
 		g_material_index,
 	};
+}
+
+void allocate_pt_materials()
+{
+	constexpr unsigned int stride = sizeof(CompressedMaterial)/sizeof(glm::vec4);
+
+	// TODO: Colored logging
+	printf("Allocating %lu materials for path tracer\n", Material::all.size());
+	std::vector <CompressedMaterial> materials;
+	for (const Material &material : Material::all) {
+		CompressedMaterial compressed_material;
+
+		compressed_material.diffuse = glm::vec4 {material.diffuse, 1.0f};
+		compressed_material.specular = glm::vec4 {material.specular, 1.0f};
+		compressed_material.emission = glm::vec4 {material.emission, 1.0f};
+		compressed_material.roughness = glm::vec4 {material.roughness};
+
+		materials.push_back(compressed_material);
+	}
+
+	glGenTextures(1, &pt.materials_texture);
+	glBindTexture(GL_TEXTURE_2D, pt.materials_texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, stride * materials.size(), 1, 0, GL_RGBA, GL_FLOAT, materials.data());
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void render_pt_pipeline(std::future <std::tuple <float *, int, int>> &future, Framebuffer &fb, std::vector <GLBuffers> &buffers, unsigned int shader_program, unsigned int path_tracer_program)
+{
+	// Bind framebuffer
+	glBindFramebuffer(GL_FRAMEBUFFER, fb.framebuffer);
+
+	// Clear
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	// Load shader and set uniforms
+	glUseProgram(shader_program);
+
+	glm::mat4 view = camera.aperature.view_matrix(camera.transform);
+	// TODO: pass extent to this method
+	glm::mat4 projection = camera.aperature.perspective_matrix();
+
+	glm::mat4 model {1.0f};
+	glm::scale(model, glm::vec3 {1.0f});
+
+	set_mat4(shader_program, "model", model);
+	set_mat4(shader_program, "view", view);
+	set_mat4(shader_program, "projection", projection);
+
+	// TODO: use common VAO...
+	glBindVertexArray(buffers[0].vao);
+	for (const GLBuffers &buffer : buffers) {
+		unsigned int material_index = buffer.source->material_index;
+		set_uint(shader_program, "material_index", material_index);
+
+		glBindVertexArray(buffer.vao);
+		glDrawElements(GL_TRIANGLES, buffer.count, GL_UNSIGNED_INT, 0);
+	}
+
+	// Run the compute shader
+	glUseProgram(path_tracer_program);
+
+	// Bind all the textures
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, fb.g_position);
+
+	glActiveTexture(GL_TEXTURE2);
+	glBindTexture(GL_TEXTURE_2D, fb.g_normal);
+
+	glActiveTexture(GL_TEXTURE4);
+	glBindTexture(GL_TEXTURE_2D, fb.g_material_index);
+
+	glActiveTexture(GL_TEXTURE3);
+	glBindTexture(GL_TEXTURE_2D, pt.materials_texture);
+
+	// Environment map loading
+	if (future.valid()) {
+		if (future.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+			std::tuple <float *, int, int> result = future.get();
+
+			float *data = std::get <0> (result);
+			int width = std::get <1> (result);
+			int height = std::get <2> (result);
+
+			// Create environment map texture
+			printf("Creating environment map texture\n");
+			glGenTextures(1, &pt.environment_map);
+			glBindTexture(GL_TEXTURE_2D, pt.environment_map);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_FLOAT, data);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			free(data);
+
+			glBindTexture(GL_TEXTURE_2D, 0);
+
+			// TODO: Trigger a popup (or go to the log...)
+		}
+
+		glActiveTexture(GL_TEXTURE5);
+		glBindTexture(GL_TEXTURE_2D, 0);
+	} else {
+		glActiveTexture(GL_TEXTURE5);
+		glBindTexture(GL_TEXTURE_2D, pt.environment_map);
+	}
+
+	glBindImageTexture(0, pt.render_target, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+
+	// Set the uniforms
+	auto uvw = uvw_frame(camera.aperature, camera.transform);
+	set_vec3(path_tracer_program, "camera.position", camera.transform[3]);
+	set_vec3(path_tracer_program, "camera.axis_u", std::get <0> (uvw));
+	set_vec3(path_tracer_program, "camera.axis_v", std::get <1> (uvw));
+	set_vec3(path_tracer_program, "camera.axis_w", std::get <2> (uvw));
+
+	// Run the shader
+	glDispatchCompute(RENDER_WIDTH, RENDER_HEIGHT, 1);
+}
+
+void render_ui_pipeline()
+{
+	static auto start_time = std::chrono::high_resolution_clock::now();
+
+	// auto start_time = std::chrono::high_resolution_clock::now();
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	// Start the Dear ImGui frame
+	ImGui_ImplOpenGL3_NewFrame();
+	ImGui_ImplGlfw_NewFrame();
+
+	ImGui::NewFrame();
+
+	// Docking space
+	ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
+
+	// UI elements
+	ImGui::Begin("Performance");
+		ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+
+		// Plot the frame times over 5 seconds
+		using frame_time = std::pair <float, float>;
+		static std::vector <frame_time> frames;
+
+		float fps = ImGui::GetIO().Framerate;
+		float time = std::chrono::duration <float> (std::chrono::high_resolution_clock::now() - start_time).count();
+		frames.push_back({time, fps});
+
+		// Remove old frame times
+		while (frames.size() > 0 && frames.front().first < time - 5.0f)
+			frames.erase(frames.begin());
+
+		// Plot the frame times
+		ImPlot::SetNextAxesLimits(0, 5, 0, 165, ImGuiCond_Always);
+		if (ImPlot::BeginPlot("Frame times")) {
+			std::vector <float> times;
+			std::vector <float> fpses;
+
+			float min_time = frames.front().first;
+			for (auto &frame : frames) {
+				times.push_back(frame.first - min_time);
+				fpses.push_back(frame.second);
+			}
+
+			// Set limits
+			ImPlot::PlotLine("FPS", times.data(), fpses.data(), times.size());
+
+
+			ImPlot::EndPlot();
+		}
+	ImGui::End();
+
+	ImGui::Begin("Viewport");
+		constexpr float padding = 10;
+
+		// Get ImGui window size
+		ImVec2 window_size = ImGui::GetWindowSize();
+		window_size.x -= padding * 2;
+		window_size.y -= padding * 2;
+
+		// Set the camera aspect ratio for the next frame
+		camera.aperature.m_aspect = window_size.x / window_size.y;
+
+		// Render the framebuffer
+		ImGui::Image(
+			(void *)(intptr_t) pt.render_target,
+			window_size,
+			ImVec2 {0, 1}, ImVec2 {1, 0}
+		);
+
+		// Check if the window has focus
+		app.viewport_hovered = ImGui::IsItemHovered();
+		app.viewport_focused = ImGui::IsWindowFocused();
+	ImGui::End();
+
+	ImGui::EndFrame();
+
+	// Update platform windows
+	ImGui::UpdatePlatformWindows();
+
+	// Render UI
+	ImGui::Render();
+	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
