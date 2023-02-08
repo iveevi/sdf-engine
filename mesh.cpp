@@ -122,6 +122,7 @@ Model load_model(const std::string &path)
 
 	// Load submeshes
 	std::vector <Mesh> meshes;
+	std::vector <int> emissive_meshes;
 
 	for (int i = 0; i < shapes.size(); i++) {
 		auto &mesh = shapes[i].mesh;
@@ -231,9 +232,7 @@ Model load_model(const std::string &path)
 					tinyobj::material_t m = materials[mesh.material_ids[f]];
 					material.diffuse = {m.diffuse[0], m.diffuse[1], m.diffuse[2]};
 					material.specular = {m.specular[0], m.specular[1], m.specular[2]};
-					// material.ambient = {m.ambient[0], m.ambient[1], m.ambient[2]};
-
-					// material.emission = {m.emission[0], m.emission[1], m.emission[2]};
+					material.emission = {m.emission[0], m.emission[1], m.emission[2]};
 
 					// Surface properties
 					// mat.shininess = m.shininess;
@@ -290,6 +289,11 @@ Model load_model(const std::string &path)
 				int material_index = Material::all.size();
 				Material::all.push_back(material);
 
+				if (glm::length(material.emission)) {
+					emissive_meshes.push_back(meshes.size());
+					printf("Emission material\n");
+				}
+				
 				meshes.push_back(Mesh {vertices, indices, material_index});
 
 				// Clear the vertices and indices
@@ -301,7 +305,7 @@ Model load_model(const std::string &path)
 		}
 	}
 
-	return Model {meshes};
+	return Model {meshes, emissive_meshes};
 }
 
 GLBuffers allocate_gl_buffers(const Mesh *mesh)
@@ -348,8 +352,16 @@ GLBuffers allocate_gl_buffers(const Mesh *mesh)
 	return buffers;
 }
 
+// Cache of loaded textures
+std::map <std::string, GLTexture> GLTexture::all;
+
 GLTexture allocate_gl_texture(const std::string &path)
 {
+	// Check if the texture has already been loaded
+	if (GLTexture::all.find(path) != GLTexture::all.end())
+		return GLTexture::all[path];
+
+	// Otherwise, load the texture
 	GLTexture texture;
 
 	// Load with stb_image
@@ -385,6 +397,11 @@ GLTexture allocate_gl_texture(const std::string &path)
 	// Free image data
 	stbi_image_free(data);
 
+	// Transfer other properties
 	texture.path = path;
+
+	// Cache the texture
+	GLTexture::all[path] = texture;
+
 	return texture;
 }

@@ -1,9 +1,10 @@
 #pragma once
 
 // Standard headers
+#include <map>
+#include <optional>
 #include <string>
 #include <vector>
-#include <optional>
 
 // GLM headers
 #include <glm/glm.hpp>
@@ -20,11 +21,14 @@ struct Vertex {
 struct GLTexture {
 	std::string path;
 	unsigned int id;
+
+	static std::map <std::string, GLTexture> all;
 };
 
 struct Material {
 	glm::vec3 diffuse;
 	glm::vec3 specular;
+	glm::vec3 emission;
 	float roughness;
 
 	std::optional <GLTexture> diffuse_texture = {};
@@ -41,6 +45,7 @@ struct Mesh {
 
 struct Model {
 	std::vector <Mesh> meshes;
+	std::vector <int> emissive_meshes;
 };
 
 struct GLBuffers {

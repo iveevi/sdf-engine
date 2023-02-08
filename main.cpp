@@ -9,11 +9,13 @@ constexpr int HEIGHT = 1000;
 
 GLFWwindow *glfw_init();
 
+// Camera struct
 static struct {
 	glm::mat4 transform {1.0f};
 	Aperature aperature {};
 } camera;
 
+// Framebuffer struct
 struct Framebuffer {
 	unsigned int framebuffer;
 
@@ -25,6 +27,51 @@ struct Framebuffer {
 
 Framebuffer allocate_gl_framebuffer();
 
+// All binding points
+enum {
+	PT_MATERIALS = GL_TEXTURE4,
+};
+
+// Path tracer information struct
+struct {
+	unsigned int materials_texture;
+} pt;
+
+// Allocate the materials
+struct CompressedMaterial {
+	glm::vec4 diffuse;
+	glm::vec4 specular;
+	glm::vec4 emission;
+	glm::vec4 roughness;
+};
+
+void allocate_pt_materials()
+{
+	constexpr unsigned int stride = sizeof(CompressedMaterial)/sizeof(glm::vec4);
+
+	// TODO: Colored logging
+	printf("Allocating %lu materials for path tracer\n", Material::all.size());
+	std::vector <CompressedMaterial> materials;
+	for (const Material &material : Material::all) {
+		CompressedMaterial compressed_material;
+
+		compressed_material.diffuse = glm::vec4 {material.diffuse, 1.0f};
+		compressed_material.specular = glm::vec4 {material.specular, 1.0f};
+		compressed_material.emission = glm::vec4 {material.emission, 1.0f};
+		compressed_material.roughness = glm::vec4 {material.roughness};
+
+		materials.push_back(compressed_material);
+	}
+
+	glGenTextures(1, &pt.materials_texture);
+	glBindTexture(GL_TEXTURE_2D, pt.materials_texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, stride * materials.size(), 1, 0, GL_RGBA, GL_FLOAT, materials.data());
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 // Quad rendering for the final image
 void render_final_image()
 {
@@ -35,8 +82,8 @@ void render_final_image()
 		constexpr float quad[] = {
 			-1.0f,  1.0f, 0.0f,	0.0f, 1.0f,
 			-1.0f, -1.0f, 0.0f,	0.0f, 0.0f,
-			 1.0f,  1.0f, 0.0f,	1.0f, 1.0f,
-			 1.0f, -1.0f, 0.0f,	1.0f, 0.0f,
+			1.0f,  1.0f, 0.0f,	1.0f, 1.0f,
+			1.0f, -1.0f, 0.0f,	1.0f, 0.0f,
 		};
 
 		// setup plane VAO
@@ -72,12 +119,10 @@ int main()
 		return -1;
 
 	// Load shaders
-	// unsigned int vertex_shader = compile_shader("../shaders/basic.vert", GL_VERTEX_SHADER);
-	// unsigned int fragment_shader = compile_shader("../shaders/albedo.frag", GL_FRAGMENT_SHADER);
-
 	unsigned int vertex_shader = compile_shader("../shaders/gbuffer.vert", GL_VERTEX_SHADER);
 	unsigned int fragment_shader = compile_shader("../shaders/gbuffer.frag", GL_FRAGMENT_SHADER);
 
+	// TODO: keep the quad textures inside the method...
 	unsigned int quad_vertex_shader = compile_shader("../shaders/quad.vert", GL_VERTEX_SHADER);
 	unsigned int quad_fragment_shader = compile_shader("../shaders/quad.frag", GL_FRAGMENT_SHADER);
 
@@ -99,11 +144,13 @@ int main()
 	link_program(path_tracer_program);
 
 	// Load model and all its buffers
-	Model model = load_model("../../models/salle_de_bain/salle_de_bain.obj");
+	Model model = load_model("../../models/cornell_box/CornellBox-Original.obj");
 
 	std::vector <GLBuffers> buffers;
 	for (const Mesh &mesh : model.meshes)
 		buffers.push_back(allocate_gl_buffers(&mesh));
+
+	printf("# of emissive meshes: %lu\n", model.emissive_meshes.size());
 
 	// Enable depth testing
 	glEnable(GL_DEPTH_TEST);
@@ -121,6 +168,9 @@ int main()
 
 	// Unbind framebuffer
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+	// Allocate PT resources
+	allocate_pt_materials();
 
 	// Main loop
 	while (!glfwWindowShouldClose(window)) {
@@ -158,7 +208,10 @@ int main()
 		// TODO: pass extent to this method
 		glm::mat4 projection = camera.aperature.perspective_matrix();
 
-		set_mat4(shader_program, "model", glm::mat4 {1.0f});
+		glm::mat4 model {1.0f};
+		glm::scale(model, glm::vec3 {1.0f});
+
+		set_mat4(shader_program, "model", model);
 		set_mat4(shader_program, "view", view);
 		set_mat4(shader_program, "projection", projection);
 
@@ -167,18 +220,6 @@ int main()
 		glBindVertexArray(buffers[0].vao);
 		for (const GLBuffers &buffer : buffers) {
 			unsigned int material_index = buffer.source->material_index;
-			const Material &material = Material::all[material_index];
-
-			/* bool has_diffuse_texture = material.diffuse_texture.has_value();
-			set_vec3(shader_program, "diffuse", material.diffuse);
-			set_int(shader_program, "has_diffuse_texure", has_diffuse_texture);
-
-			// Bind diffuse texture
-			if (has_diffuse_texture) {
-				glActiveTexture(GL_TEXTURE0);
-				glBindTexture(GL_TEXTURE_2D, material.diffuse_texture->id);
-			} */
-
 			set_uint(shader_program, "material_index", material_index);
 
 			glBindVertexArray(buffer.vao);
@@ -195,11 +236,13 @@ int main()
 		glActiveTexture(GL_TEXTURE2);
 		glBindTexture(GL_TEXTURE_2D, fb.g_normal);
 
-		// glActiveTexture(GL_TEXTURE3);
-		// glBindTexture(GL_TEXTURE_2D, fb.g_material_index);
-		
+		glActiveTexture(GL_TEXTURE4);
+		glBindTexture(GL_TEXTURE_2D, fb.g_material_index);
+
+		glActiveTexture(GL_TEXTURE3);
+		glBindTexture(GL_TEXTURE_2D, pt.materials_texture);
+
 		glBindImageTexture(0, render_target, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
-		glBindImageTexture(3, fb.g_material_index, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32UI);
 
 		glDispatchCompute(WIDTH, HEIGHT, 1);
 
@@ -223,6 +266,8 @@ int main()
 
 	// Clean up
 	glfwTerminate();
+
+	// TODO: clean up buffers and everything else
 
 	return 0;
 }
