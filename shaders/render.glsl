@@ -8,6 +8,16 @@ layout (binding = 1) uniform sampler2D positions;
 layout (binding = 2) uniform sampler2D normals;
 layout (binding = 3) uniform sampler2D materials;
 layout (binding = 4) uniform usampler2D material_indices;
+layout (binding = 5) uniform sampler2D environment;
+
+const float M_PI = 3.1415926535897932384626433832795;
+
+uniform struct {
+	vec3 position;
+	vec3 axis_u;
+	vec3 axis_v;
+	vec3 axis_w;
+} camera;
 
 struct Material {
 	vec3 diffuse;
@@ -33,24 +43,56 @@ Material material_at(int index)
 	return material;
 }
 
+vec4 tonemap(vec4 color)
+{
+	vec4 a = color * (2.51f * color + 0.03f);
+	vec4 b = color * (2.43f * color + 0.59f) + 0.14f;
+	return clamp(a/b, 0.0f, 1.0f);
+}
+
+vec2 dir_to_uv(vec3 dir)
+{
+	float theta = atan(dir.z, dir.x);
+	float phi = acos(dir.y);
+
+	float u = theta / (2 * M_PI) + 0.5;
+	float v = phi / M_PI;
+
+	return vec2(u, v);
+}
+
 void main()
 {
 	// TODO: submesh colorer using material index and color wheel
 	ivec2 img_idx = ivec2(gl_GlobalInvocationID.xy);
+	uvec2 size = imageSize(image);
+	vec2 uv = vec2(img_idx)/vec2(size);
 
 	unsigned int material_index = texelFetch(material_indices, img_idx, 0).x;
 	if (material_index == 0) {
-		imageStore(image, img_idx, vec4(0, 1, 1, 0));
+		// Generate camera ray
+		vec2 d = 2 * (vec2(img_idx) - vec2(0.5))
+			/ vec2(size) - vec2(1.0);
+
+		vec3 dir = normalize(
+			camera.axis_u * d.x
+			+ camera.axis_v * d.y
+			+ camera.axis_w
+		);
+
+		// Convert direction to UV coordinates
+		vec2 uv = dir_to_uv(dir);
+		vec4 env_color = texture(environment, uv);
+		imageStore(image, img_idx, tonemap(env_color));
 		return;
 	}
-
-	uvec2 size = imageSize(image);
-	vec2 uv = vec2(img_idx)/vec2(size);
 
 	vec3 position = texelFetch(positions, img_idx, 0).xyz;
 	vec3 normal = texelFetch(normals, img_idx, 0).xyz;
 
 	Material material = material_at(int(material_index));
 
-	imageStore(image, img_idx, vec4(material.diffuse + material.emission, 0.0));
+	vec3 color = material.diffuse + material.emission;
+	vec4 color4 = vec4(color, 0.0);
+	imageStore(image, img_idx, tonemap(color4));
 }

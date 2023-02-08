@@ -1,4 +1,9 @@
 #include <iostream>
+#include <future>
+
+#define TINY_EXR_USE_STB_ZLIB 1
+#define TINYEXR_IMPLEMENTATION
+#include <tinyexr/tinyexr.h>
 
 #include "aperature.hpp"
 #include "mesh.hpp"
@@ -35,6 +40,7 @@ enum {
 // Path tracer information struct
 struct {
 	unsigned int materials_texture;
+	unsigned int environment_map;
 } pt;
 
 // Allocate the materials
@@ -68,15 +74,17 @@ void allocate_pt_materials()
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, stride * materials.size(), 1, 0, GL_RGBA, GL_FLOAT, materials.data());
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	
+
 	glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 // Quad rendering for the final image
-void render_final_image()
+void render_final_image(unsigned int render_target)
 {
+	// TODO: pass bool for deallocation
 	static unsigned int vao = 0;
 	static unsigned int vbo;
+	static unsigned int shader = 0;
 
 	if (vao == 0) {
 		constexpr float quad[] = {
@@ -86,7 +94,7 @@ void render_final_image()
 			1.0f, -1.0f, 0.0f,	1.0f, 0.0f,
 		};
 
-		// setup plane VAO
+		// Setup plane VAO and VBO
 		glGenVertexArrays(1, &vao);
 		glGenBuffers(1, &vbo);
 		glBindVertexArray(vao);
@@ -95,9 +103,31 @@ void render_final_image()
 
 		glEnableVertexAttribArray(0);
 		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+
 		glEnableVertexAttribArray(1);
 		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+
+		// Load shaders
+		unsigned int vertex_shader = compile_shader("../shaders/quad.vert", GL_VERTEX_SHADER);
+		unsigned int fragment_shader = compile_shader("../shaders/quad.frag", GL_FRAGMENT_SHADER);
+
+		shader = glCreateProgram();
+		glAttachShader(shader, vertex_shader);
+		glAttachShader(shader, fragment_shader);
+		link_program(shader);
 	}
+
+	// Bind and clear the main framebuffer
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	// Render the final image
+	glUseProgram(shader);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, render_target);
 
 	glBindVertexArray(vao);
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -108,11 +138,6 @@ int main()
 {
 	// TODO: HDR output framebuffer?
 
-	// TODO: materials in storage buffers for easy access in path tracer
-
-	// TODO: for path tracing: G-buffer using position, normal, and material
-	// index outputs
-
 	// Initialize GLFW
 	GLFWwindow *window = glfw_init();
 	if (!window)
@@ -121,11 +146,6 @@ int main()
 	// Load shaders
 	unsigned int vertex_shader = compile_shader("../shaders/gbuffer.vert", GL_VERTEX_SHADER);
 	unsigned int fragment_shader = compile_shader("../shaders/gbuffer.frag", GL_FRAGMENT_SHADER);
-
-	// TODO: keep the quad textures inside the method...
-	unsigned int quad_vertex_shader = compile_shader("../shaders/quad.vert", GL_VERTEX_SHADER);
-	unsigned int quad_fragment_shader = compile_shader("../shaders/quad.frag", GL_FRAGMENT_SHADER);
-
 	unsigned int path_tracer_shader = compile_shader("../shaders/render.glsl", GL_COMPUTE_SHADER);
 
 	// Create shader programs
@@ -133,11 +153,6 @@ int main()
 	glAttachShader(shader_program, vertex_shader);
 	glAttachShader(shader_program, fragment_shader);
 	link_program(shader_program);
-
-	unsigned int quad_shader_program = glCreateProgram();
-	glAttachShader(quad_shader_program, quad_vertex_shader);
-	glAttachShader(quad_shader_program, quad_fragment_shader);
-	link_program(quad_shader_program);
 
 	unsigned int path_tracer_program = glCreateProgram();
 	glAttachShader(path_tracer_program, path_tracer_shader);
@@ -171,6 +186,28 @@ int main()
 
 	// Allocate PT resources
 	allocate_pt_materials();
+
+	// Test loading EXR
+	auto exr_loader = [&]() -> std::tuple <float *, int, int> {
+		float *data;
+		int width;
+		int height;
+
+		const char *filename = "../../downloads/095_hdrmaps_com_free.exr";
+		const char *error;
+
+		int ret = LoadEXR(&data, &width, &height, filename, &error);
+		if (ret != 0) {
+			fprintf(stderr, "Error loading EXR: %s", error);
+			FreeEXRErrorMessage(error);
+			return {nullptr, 0, 0};
+		}
+
+		printf("Loaded EXR: %d x %d\n", width, height);
+		return {data, width, height};
+	};
+
+	auto future = std::async(std::launch::async, exr_loader);
 
 	// Main loop
 	while (!glfwWindowShouldClose(window)) {
@@ -229,7 +266,7 @@ int main()
 		// Run the compute shader
 		glUseProgram(path_tracer_program);
 
-		// Run the shader
+		// Bind all the textures
 		glActiveTexture(GL_TEXTURE1);
 		glBindTexture(GL_TEXTURE_2D, fb.g_position);
 
@@ -242,22 +279,48 @@ int main()
 		glActiveTexture(GL_TEXTURE3);
 		glBindTexture(GL_TEXTURE_2D, pt.materials_texture);
 
+		// Environment map loading
+		if (future.valid()) {
+			if (future.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+				std::tuple <float *, int, int> result = future.get();
+
+				float *data = std::get <0> (result);
+				int width = std::get <1> (result);
+				int height = std::get <2> (result);
+
+				// Create environment map texture
+				printf("Creating environment map texture\n");
+				glGenTextures(1, &pt.environment_map);
+				glBindTexture(GL_TEXTURE_2D, pt.environment_map);
+				glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_FLOAT, data);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+				free(data);
+
+				glBindTexture(GL_TEXTURE_2D, 0);
+			}
+
+			glActiveTexture(GL_TEXTURE5);
+			glBindTexture(GL_TEXTURE_2D, 0);
+		} else {
+			glActiveTexture(GL_TEXTURE5);
+			glBindTexture(GL_TEXTURE_2D, pt.environment_map);
+		}
+
 		glBindImageTexture(0, render_target, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
 
+		// Set the uniforms
+		auto uvw = uvw_frame(camera.aperature, camera.transform);
+		set_vec3(path_tracer_program, "camera.position", camera.transform[3]);
+		set_vec3(path_tracer_program, "camera.axis_u", std::get <0> (uvw));
+		set_vec3(path_tracer_program, "camera.axis_v", std::get <1> (uvw));
+		set_vec3(path_tracer_program, "camera.axis_w", std::get <2> (uvw));
+
+		// Run the shader
 		glDispatchCompute(WIDTH, HEIGHT, 1);
 
-		// Render the final image
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-		glUseProgram(quad_shader_program);
-
-		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, render_target);
-
-		render_final_image();
+		// Final composition
+		render_final_image(render_target);
 
 		// Swap buffers
 		glfwSwapBuffers(window);
