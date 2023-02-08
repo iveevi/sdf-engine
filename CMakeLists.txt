@@ -11,6 +11,7 @@ find_package(glfw3 REQUIRED)
 add_executable(sdf-engine
     main.cpp
     mesh.cpp
+    image.cpp
     glad/src/glad.c
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/tinyexr/deps/miniz/miniz.c
 )

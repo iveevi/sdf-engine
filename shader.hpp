@@ -7,13 +7,14 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "gl.hpp"
+#include "logging.hpp"
 
 inline std::string read_glsl(const std::string &path)
 {
 	// Open file
 	std::ifstream file(path);
 	if (!file.is_open()) {
-		printf("Failed to open file: %s\n", path.c_str());
+		logf(eLogError, "Failed to open file: %s", path.c_str());
 		return "";
 	}
 
@@ -32,7 +33,7 @@ inline std::string read_glsl(const std::string &path)
 
 			// check that token is of the format "<file>"
 			if (token.size() < 2 || token[0] != '<' || token[token.size() - 1] != '>') {
-				printf("Invalid include directive: %s\n", line.c_str());
+				logf(eLogError, "Invalid include directive: %s", line.c_str());
 				return "";
 			}
 
@@ -72,7 +73,7 @@ int compile_shader(const char *path, unsigned int type)
 	tmp.close();
 
 	if (!source) {
-		printf("Failed to read shader source\n");
+		logf(eLogError, "Failed to read shader source");
 		throw std::runtime_error("Failed to read shader source");
 	}
 
@@ -88,11 +89,11 @@ int compile_shader(const char *path, unsigned int type)
 
 	if (!success) {
 		glGetShaderInfoLog(shader, 512, NULL, info_log);
-		printf("Failed to compile shader (%s):\n%s\n", path, info_log);
+		logf(eLogError, "Failed to compile shader (%s):\n%s", path, info_log);
 		throw std::runtime_error("Failed to compile shader");
 	}
 
-	printf("Successfully compiled shader %s\n", path);
+	logf(eLogInfo, "Successfully compiled shader %s", path);
 	return shader;
 }
 
@@ -108,7 +109,7 @@ int link_program(unsigned int program)
 
 	if (!success) {
 		glGetProgramInfoLog(program, 512, NULL, info_log);
-		printf("Failed to link program: %s\n", info_log);
+		logf(eLogError, "Failed to link program: %s\n", info_log);
 		return 0;
 	}
 

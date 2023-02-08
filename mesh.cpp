@@ -4,8 +4,6 @@
 #include <unordered_map>
 
 // STB headers
-#define STB_IMAGE_IMPLEMENTATION
-
 #include <stb/stb_image.h>
 
 // TinyObjLoader headers

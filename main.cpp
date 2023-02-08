@@ -1,13 +1,12 @@
 #include <iostream>
 #include <future>
 
-#define TINY_EXR_USE_STB_ZLIB 1
-#define TINYEXR_IMPLEMENTATION
 #include <tinyexr/tinyexr.h>
 
 #include "aperature.hpp"
 #include "mesh.hpp"
 #include "shader.hpp"
+#include "logging.hpp"
 
 constexpr int WIDTH = 1000;
 constexpr int HEIGHT = 1000;
@@ -198,12 +197,12 @@ int main()
 
 		int ret = LoadEXR(&data, &width, &height, filename, &error);
 		if (ret != 0) {
-			fprintf(stderr, "Error loading EXR: %s", error);
+			logf(eLogError, "Error loading EXR: %s", error);
 			FreeEXRErrorMessage(error);
 			return {nullptr, 0, 0};
 		}
 
-		printf("Loaded EXR: %d x %d\n", width, height);
+		logf(eLogInfo, "Loaded EXR: %d x %d", width, height);
 		return {data, width, height};
 	};
 
